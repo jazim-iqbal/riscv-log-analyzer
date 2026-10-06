@@ -4,13 +4,14 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  ./scripts/analyze.sh <logfile> [--format text|csv] [--output <path>] [--verbose] [--help]
+  ./scripts/analyze.sh <logfile> [--format text|csv] [--output <path>] [--verbose] [--compare <oldlog>] [--help]
 
 Options:
-  --format text|csv   (default: text)
-  --output <path>     write report to file (default: stdout)
-  --verbose           verbose logs to stderr
-  --help              show help
+  --format text|csv      (default: text)
+  --output <path>        write report to file (default: stdout)
+  --verbose              verbose logs to stderr
+  --compare <oldlog>     show regressions (old PASS -> new FAIL)
+  --help                 show help
 
 Exit codes:
   0  if no FAIL tests
@@ -21,8 +22,14 @@ USAGE
 VERBOSE=0
 FORMAT="text"
 OUTPUT=""
+COMPARE=""
 
 vlog() { if [ "$VERBOSE" -eq 1 ]; then echo "[VERBOSE] $*" >&2; fi; }
+
+# colors (only for terminal output, not files)
+GREEN=$'\033[0;32m'
+RED=$'\033[0;31m'
+NC=$'\033[0m'
 
 # ---------- args ----------
 if [ $# -lt 1 ]; then
@@ -43,6 +50,9 @@ while [ $# -gt 0 ]; do
     --output)
       [ $# -ge 2 ] || { echo "Error: --output needs a path" >&2; exit 1; }
       OUTPUT="$2"; shift 2 ;;
+    --compare)
+      [ $# -ge 2 ] || { echo "Error: --compare needs a path" >&2; exit 1; }
+      COMPARE="$2"; shift 2 ;;
     *) echo "Error: unknown option '$1'" >&2; usage; exit 1 ;;
   esac
 done
@@ -58,12 +68,17 @@ if [ "$FORMAT" != "text" ] && [ "$FORMAT" != "csv" ]; then
   exit 1
 fi
 
+if [ -n "$COMPARE" ] && [ ! -f "$COMPARE" ]; then
+  echo "Error: compare log not found: $COMPARE" >&2
+  exit 1
+fi
+
 if [ -n "$OUTPUT" ]; then
   mkdir -p "$(dirname "$OUTPUT")"
 fi
 
 NOW="$(date "+%Y-%m-%d %H:%M:%S")"
-vlog "LOGFILE=$LOGFILE FORMAT=$FORMAT OUTPUT=${OUTPUT:-stdout}"
+vlog "LOGFILE=$LOGFILE FORMAT=$FORMAT OUTPUT=${OUTPUT:-stdout} COMPARE=${COMPARE:-none}"
 
 # ---------- counts ----------
 TOTAL="$(grep -E 'TEST (PASS|FAIL|SKIP):' "$LOGFILE" | wc -l | awk '{print $1}')"
@@ -75,12 +90,11 @@ PASS_RATE="$(awk -v p="$PASS" -v t="$TOTAL" 'BEGIN{ if(t==0) printf "0.0"; else 
 
 FAILED_LIST="$(grep 'TEST FAIL:' "$LOGFILE" | awk '{print $4}' | sed '/^$/d' || true)"
 
-# ---------- timing stats (no awk quoting issues) ----------
+# ---------- timing stats ----------
 TIMING_LINE="$(
 awk -f - "$LOGFILE" <<'AWK'
 BEGIN { tcount=0; }
 {
-  # Capture: TEST ...: <name> ... (<time>s)
   if (match($0, /TEST (PASS|FAIL|SKIP): ([^ ]+).* \(([0-9.]+)s\)/, m)) {
     test=m[2];
     time=m[3]+0.0;
@@ -102,8 +116,24 @@ END {
 }
 AWK
 )"
-
 IFS=$'\t' read -r MIN_T MIN_TEST MAX_T MAX_TEST AVG_T <<< "$TIMING_LINE"
+
+# ---------- compare (bonus) ----------
+REGRESS_LIST=""
+if [ -n "$COMPARE" ]; then
+  REGRESS_LIST="$(
+    awk 'FNR==NR {
+      if (match($0, /TEST (PASS|FAIL|SKIP): ([^ ]+)/, m)) old[m[2]]=m[1];
+      next
+    }
+    {
+      if (match($0, /TEST (PASS|FAIL|SKIP): ([^ ]+)/, m)) {
+        newres=m[1]; t=m[2];
+        if (old[t]=="PASS" && newres=="FAIL") print t;
+      }
+    }' "$COMPARE" "$LOGFILE" | sort -u
+  )"
+fi
 
 # ---------- report ----------
 if [ "$FORMAT" = "csv" ]; then
@@ -146,6 +176,23 @@ Max time: ${MAX_T}s (${MAX_TEST})
 Avg time: ${AVG_T}s"
   fi
 
+  if [ -n "$COMPARE" ]; then
+    REPORT="$REPORT
+--- Regressions (old PASS -> new FAIL) ---"
+    if [ -z "$REGRESS_LIST" ]; then
+      REPORT="$REPORT
+None"
+    else
+      j=1
+      while IFS= read -r r; do
+        [ -n "$r" ] || continue
+        REPORT="$REPORT
+$j. $r"
+        j=$((j+1))
+      done <<< "$REGRESS_LIST"
+    fi
+  fi
+
   if [ "$FAIL" -gt 0 ]; then
     REPORT="$REPORT
 --- Verdict: FAIL ---
@@ -161,7 +208,13 @@ fi
 if [ -n "$OUTPUT" ]; then
   printf "%s\n" "$REPORT" > "$OUTPUT"
 else
-  printf "%s\n" "$REPORT"
+  # color only if printing to terminal + text format
+  if [ "$FORMAT" = "text" ] && [ -t 1 ]; then
+    printf "%s\n" "$REPORT" \
+      | sed "s/--- Verdict: PASS ---/${GREEN}--- Verdict: PASS ---${NC}/; s/--- Verdict: FAIL ---/${RED}--- Verdict: FAIL ---${NC}/"
+  else
+    printf "%s\n" "$REPORT"
+  fi
 fi
 
 # ---------- exit code ----------
