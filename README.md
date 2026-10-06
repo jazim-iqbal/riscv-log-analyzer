@@ -63,4 +63,4 @@ Verbose mode:
 - `make all`    : analyze all logs in `test_data/`
 - `make test`   : basic checks (exit codes)
 - `make report` : generate `output/summary_report.txt` and `output/report.html`
-- `make clean`  : remove generated output files
+- `make clean`  : remove generated output filesConflictLine: A
