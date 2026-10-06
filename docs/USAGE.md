@@ -13,6 +13,7 @@
 - `--format text|csv` (default: `text`)
 - `--output <path>` (default: stdout)
 - `--verbose`
+- `--compare <oldlog>` show regressions (old PASS -> new FAIL)
 - `--help`
 
 ### Exit Codes
