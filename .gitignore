@@ -1,0 +1,12 @@
+# Generated output (do not track)
+output/
+
+# Editor/OS junk
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Build artifacts (if any)
+*.o
+*.d
